@@ -31,16 +31,16 @@ users.append(LoginUser(username="1414",password="1414"))
 
 #2번 로그인
 @app.post("/login")
-def login(response: Response, user: LoginUser = Body()):
+def login(response: Response, user: LoginUser = Body(...)):
     # 로그인 검증
     ok = any(u.username == user.username and u.password == user.password for u in users)
     if not ok:
         return JSONResponse({"ok": False, "reason": "invalid credentials"}, status_code=401)
+
     # 응답 만들고 쿠키 세팅
     res = JSONResponse({"ok": True})
     res.set_cookie("username", user.username, httponly=True)
     return res
-
 
 @app.get("/page")
 def page(request: Request):
@@ -61,6 +61,42 @@ def get_current_user(request: Request) -> str:
         raise HTTPException(status_code=401, detail="다시 로그인해주세요")
     return username
 
+@app.post("/upload/file")
+async def upload_file(request: Request, file: UploadFile = File(...)):
+    username = get_current_user(request)
+
+    # 파일을 rag_server로 전달
+    files = {
+        "file": (
+            file.filename,
+            await file.read(),
+            file.content_type
+        )
+    }
+
+    rag_res = requests.post(
+        f"{RAG_SERVER_URL}/analyze_resume",
+        files=files
+    )
+
+    if rag_res.status_code != 200:
+        raise HTTPException(status_code=500, detail="RAG 서버 파일 분석 실패")
+
+    result = rag_res.json()
+
+    # 사용자별 히스토리 저장
+    question_store.setdefault(username, []).append({
+        "type": "resume",
+        "filename": file.filename,
+        "result": result
+    })
+
+    return {
+        "ok": True,
+        "user": username,
+        "filename": file.filename,
+        "analysis": result
+    }
 
 @app.post("/upload")
 async def upload(request: Request, text: str = Body(...)):
